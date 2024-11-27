@@ -1,7 +1,7 @@
 # open-xxxxxxxxxx-information-data-scraping-crawler
 
 #### 介绍
-政府信息公开数据抓取爬虫
+xxxx信息公开数据抓取爬虫
 
 #### 软件架构
 软件架构说明

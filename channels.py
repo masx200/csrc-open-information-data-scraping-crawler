@@ -1,7 +1,10 @@
 import json
 import os.path
+import queue
 import threading
+import time
 
+import pandas as pd
 import requests
 
 
@@ -35,7 +38,8 @@ def process_result_item(item):
 
 def download_channel_data(
         channelid,
-        filename, getAll=True,
+        # filename,
+        getAll=True,
         since_date=None,
         until_date=None,
 ):
@@ -44,20 +48,24 @@ def download_channel_data(
     本函数通过循环请求特定频道的所有数据，并将其处理后保存到指定文件中
 
 
+        :param until_date:
+        :param since_date:
+        :param getAll:
         :param channelid:
         :param filename:
         :return:
         @param channelid 频道ID，用于构建请求URL
-    @param filename 数据保存的文件名
+    # @param filename 数据保存的文件名
     """
     result = []
     iterator = channel_data_generator(channelid, getAll, since_date, until_date)
     for item in iterator:
         item = process_result_item(item)
         result.append(item)
-    with open(filename, "w", encoding="utf-8") as f:
-        f.write(json.dumps(result, indent=4, ensure_ascii=False))
-        print("文件写入成功:" + filename)
+    return result
+    # with open(filename, "w", encoding="utf-8") as f:
+    #     f.write(json.dumps(result, indent=4, ensure_ascii=False))
+    #     print("文件写入成功:" + filename)
 
 
 def channel_data_generator(channelid, getAll=True, since_date=None, until_date=None):
@@ -87,7 +95,7 @@ def channel_data_generator(channelid, getAll=True, since_date=None, until_date=N
         )
         data_from = {
             "page": page,
-            "_pageSize": 40,
+            "_pageSize": 50,
         }
         res = requests.get(apiurl, params=data_from, headers=headers)
         # 判断状态码
@@ -134,9 +142,31 @@ def channel_data_generator(channelid, getAll=True, since_date=None, until_date=N
     return
 
 
+def transform_columns(df):
+    df2 = pd.DataFrame()
+    df2["发文日期"] = df["publishedTimeStr"].map(lambda x: x[:10])
+    df2["来源"] = df["发布机构"]
+    df2["索引号"] = df["索引号"]
+    df2["文号"] = df["文号"]
+    df2["分类"] = df["channelName"]
+    df2["名称"] = df["title"]
+    df2["内容"] = df["content"]
+    # 获取当前时间的时间戳
+    current_timestamp = time.time()
+
+    # 将时间戳转换为本地时间
+    local_time = time.localtime(current_timestamp)
+
+    # 格式化时间
+    formatted_time = time.strftime('%Y-%m-%d %H:%M:%S', local_time)
+    df2["爬取时间"] = formatted_time
+    return df2
+
+
 def parallel_download(
         channels,
-        folder, getAll=True,
+        folder,
+        getAll=True,
         since_date=None,
         until_date=None,
 ):
@@ -149,35 +179,88 @@ def parallel_download(
        channels: 包含所有要下载的频道名称的列表。
        folder: 保存下载的频道数据的文件夹名称。
     """
+    qr = queue.Queue()
+    if not os.path.exists(folder):
+        os.mkdir(folder)
     threads = []
     for channel in channels:
-        if not os.path.exists(folder):
-            os.mkdir(folder)
-
-        relpath = (
-            (
-                os.path.join(
-                    folder,
-                    channel + "-" + since_date + "-" + until_date + ".json",
-                )
-            )
-            if since_date or until_date
-            else (os.path.join(folder, channel + ".json"))
-        )
+        # relpath = (
+        #     (
+        #         os.path.join(
+        #             folder,
+        #             channel + "-" + since_date + "-" + until_date + ".json",
+        #         )
+        #     )
+        #     if since_date or until_date
+        #     else (os.path.join(folder, channel + ".json"))
+        # )
         thread = threading.Thread(
-            target=download_channel_data,
+            target=lambda q, channel2, **ka: q.put(download_channel_data(channel2, **ka)),
             args=(
+                qr,
                 channel,
-                relpath,
-            ), kwargs={"getAll": getAll, "since_date": since_date, "until_date": until_date}
+                # relpath,
+            ),
+            kwargs={
+                "getAll": getAll,
+                "since_date": since_date,
+                "until_date": until_date,
+            },
         )
         threads.append(thread)
         thread.start()
     for thread in threads:
         thread.join()
+    results = []
+    while not qr.empty():
+        results.append(qr.get())
+
+    # print(results)
+    outputdatamap = {}
+    for result in results:
+        for item in result:
+            key = (
+                    get_channel_type(item)
+                    + "_"
+                    + item["publishedTimeStr"][:10].replace("-", "")
+            )
+            if key not in outputdatamap:
+                outputdatamap[key] = []
+            outputdatamap[key].append(item)
+    for key in outputdatamap:
+        outputdata = outputdatamap[key]
+        filename = os.path.join(folder, key + ".csv")
+        df = pd.DataFrame(outputdata)
+
+        df = transform_columns(df)
+        df.to_csv(filename, index=False, sep="|", encoding="utf-8", lineterminator="\n")
+        print("文件写入成功:" + filename)
 
 
-if __name__ == "__main__":
+def get_channel_type(item):
+    """
+    根据item中的channelName属性值，决定返回的字符串类型。
+
+    参数:
+    item: 包含channelName属性的字典对象，用于判断返回值。
+
+    返回:
+    如果item的channelName属性为"行政监管措施"，则返回"Regulatory_Measures"；
+    如果item的channelName属性为"行政处罚决定"，则返回"Penalty_Decisions"；
+    否则，返回item的channelName属性值。
+    """
+    return (
+        "Regulatory_Measures"
+        if item["channelName"] == "行政监管措施"
+        else (
+            "Penalty_Decisions"
+            if item["channelName"] == "行政处罚决定"
+            else item["channelName"]
+        )
+    )
+
+
+def test_download_all():
     current_directory = os.getcwd()
     channels = [
         "febe5cf9074b4ce6a52fd3d34d7a5cba",
@@ -187,7 +270,8 @@ if __name__ == "__main__":
     ]
 
     folder = os.path.join(current_directory, "download")
-    parallel_download(
-        channels,
-        folder, getAll=True
-    )
+    parallel_download(channels, folder, getAll=True)
+
+
+if __name__ == "__main__":
+    test_download_all()

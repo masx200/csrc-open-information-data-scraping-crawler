@@ -9,7 +9,7 @@ import pandas as pd
 import requests
 
 
-def process_result_item(item):
+def process_result_item(item, originname):
     """
     处理结果项。
 
@@ -34,15 +34,17 @@ def process_result_item(item):
         content = item["content"]
         content = content.replace("&ensp;", "")
         item["content"] = content
+    item["部门"] = originname
     return item
 
 
 def download_channel_data(
-        channelid,
-        # filename,
-        getAll=True,
-        since_date=None,
-        until_date=None,
+    channelid,
+    # filename,
+    originname,
+    getAll=True,
+    since_date=None,
+    until_date=None,
 ):
     """下载频道数据
 
@@ -61,7 +63,7 @@ def download_channel_data(
     result = []
     iterator = channel_data_generator(channelid, getAll, since_date, until_date)
     for item in iterator:
-        item = process_result_item(item)
+        item = process_result_item(item, originname)
         result.append(item)
     return result
     # with open(filename, "w", encoding="utf-8") as f:
@@ -90,9 +92,9 @@ def channel_data_generator(channelid, getAll=True, since_date=None, until_date=N
             "User-Agent": "Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"
         }
         apiurl = (
-                "http://www.csrc.gov.cn/searchList/"
-                + channelid
-                + "?_isAgg=true&_isJson=true&_template=index&_rangeTimeGte=&_channelName="
+            "http://www.csrc.gov.cn/searchList/"
+            + channelid
+            + "?_isAgg=true&_isJson=true&_template=index&_rangeTimeGte=&_channelName="
         )
         data_from = {
             "page": page,
@@ -132,7 +134,7 @@ def channel_data_generator(channelid, getAll=True, since_date=None, until_date=N
                         # break
                         return
                     if until_date is None or (
-                            until_date is not None and publish_date <= until_date
+                        until_date is not None and publish_date <= until_date
                     ):
                         yield item
 
@@ -153,7 +155,7 @@ def transform_columns(df):
 
     df2["名称"] = df["title"]
 
-    df2["文号"] = df["文号"]
+    df2["文号"] = df["文号"].map(lambda x: x if len(x) > 0 else "null")
     df2["内容"] = df["content"]
     # 获取当前时间的时间戳
     current_timestamp = time.time()
@@ -162,7 +164,7 @@ def transform_columns(df):
     local_time = time.localtime(current_timestamp)
 
     # 格式化时间
-    formatted_time = time.strftime('%Y-%m-%d %H:%M:%S', local_time)
+    formatted_time = time.strftime("%Y-%m-%d %H:%M:%S", local_time)
     df2["爬取时间"] = formatted_time
     return df2
 
@@ -172,7 +174,8 @@ def run_zip_files(folder):
     # print(folder)
     for file in os.listdir(folder):
         # print(file)
-        if not file.endswith(".csv"): continue;
+        if not file.endswith(".csv"):
+            continue
         # print(file)
         filepath = os.path.join(folder, file)
         if os.path.isfile(filepath):
@@ -182,20 +185,22 @@ def run_zip_files(folder):
             datadict[key].append(file)
     for key in datadict:
         value = datadict[key]
-        print("日期" + key, "文件" , value)
+        print("日期" + key, "文件", value)
         zip_path = os.path.join(folder, "SECURITIES_REGULATORY_" + key + ".zip")
-        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_LZMA) as zipf:
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_LZMA) as zipf:
             for file in value:
                 file_path = os.path.join(folder, file)
                 zipf.write(file_path, file)
         print("已完成写入" + "压缩文件：" + zip_path)
 
+
 def parallel_download(
-        channels,
-        folder,
-        getAll=True,
-        since_date=None,
-        until_date=None,
+    channels,
+    folder,
+    origins,
+    getAll=True,
+    since_date=None,
+    until_date=None,
 ):
     """
     并行下载频道数据到指定文件夹。
@@ -210,7 +215,9 @@ def parallel_download(
     if not os.path.exists(folder):
         os.mkdir(folder)
     threads = []
-    for channel in channels:
+    for index in channels.index():
+        channel = channels[index]
+        originname = origins[index]
         # relpath = (
         #     (
         #         os.path.join(
@@ -222,10 +229,13 @@ def parallel_download(
         #     else (os.path.join(folder, channel + ".json"))
         # )
         thread = threading.Thread(
-            target=lambda q, channel2, **ka: q.put(download_channel_data(channel2, **ka)),
+            target=lambda q, channel2, **ka: q.put(
+                download_channel_data(channel2, **ka)
+            ),
             args=(
                 qr,
                 channel,
+                originname,
                 # relpath,
             ),
             kwargs={
@@ -247,9 +257,9 @@ def parallel_download(
     for result in results:
         for item in result:
             key = (
-                    get_channel_type(item)
-                    + "_"
-                    + item["publishedTimeStr"][:10].replace("-", "")
+                get_channel_type(item)
+                + "_"
+                + item["publishedTimeStr"][:10].replace("-", "")
             )
             if key not in outputdatamap:
                 outputdatamap[key] = []
@@ -288,17 +298,20 @@ def get_channel_type(item):
     )
 
 
+channels = [
+    "febe5cf9074b4ce6a52fd3d34d7a5cba",
+    "55dbc14f9bea476bb09743d5f1c8c842",
+    "c8318fc200764e38b30116c2d5f72b4b",
+    "9ebc4198232e496e8bebf1b1bb1778ef",
+]
+origins = ["重庆局", "重庆局", "上海局", "上海局"]
+
+
 def task_download_all():
     current_directory = os.getcwd()
-    channels = [
-        "febe5cf9074b4ce6a52fd3d34d7a5cba",
-        "55dbc14f9bea476bb09743d5f1c8c842",
-        "c8318fc200764e38b30116c2d5f72b4b",
-        "9ebc4198232e496e8bebf1b1bb1778ef",
-    ]
 
     folder = os.path.join(current_directory, "download")
-    parallel_download(channels, folder, getAll=True)
+    parallel_download(channels, folder, origins, getAll=True)
 
 
 if __name__ == "__main__":

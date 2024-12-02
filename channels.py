@@ -147,9 +147,11 @@ def transform_columns(df):
     df2["发文日期"] = df["publishedTimeStr"].map(lambda x: x[:10])
     df2["来源"] = df["发布机构"]
     df2["索引号"] = df["索引号"]
-    df2["文号"] = df["文号"]
     df2["分类"] = df["channelName"]
+
     df2["名称"] = df["title"]
+
+    df2["文号"] = df["文号"]
     df2["内容"] = df["content"]
     # 获取当前时间的时间戳
     current_timestamp = time.time()

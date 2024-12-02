@@ -3,6 +3,7 @@ import os.path
 import queue
 import threading
 import time
+import zipfile
 
 import pandas as pd
 import requests
@@ -166,6 +167,29 @@ def transform_columns(df):
     return df2
 
 
+def run_zip_files(folder):
+    datadict: dict[str, list] = {}
+    # print(folder)
+    for file in os.listdir(folder):
+        # print(file)
+        if not file.endswith(".csv"): continue;
+        # print(file)
+        filepath = os.path.join(folder, file)
+        if os.path.isfile(filepath):
+            key = file.split(".")[0][-8:]
+            if key not in datadict:
+                datadict[key] = []
+            datadict[key].append(file)
+    for key in datadict:
+        value = datadict[key]
+        print("日期" + key, "文件" , value)
+        zip_path = os.path.join(folder, "SECURITIES_REGULATORY_" + key + ".zip")
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_LZMA) as zipf:
+            for file in value:
+                file_path = os.path.join(folder, file)
+                zipf.write(file_path, file)
+        print("已完成写入" + "压缩文件：" + zip_path)
+
 def parallel_download(
         channels,
         folder,
@@ -238,6 +262,7 @@ def parallel_download(
         df = transform_columns(df)
         df.to_csv(filename, index=False, sep="|", encoding="utf-8", lineterminator="\n")
         print("文件写入成功:" + filename)
+    run_zip_files(folder)
 
 
 def get_channel_type(item):

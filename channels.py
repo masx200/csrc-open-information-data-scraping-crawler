@@ -4,6 +4,7 @@ import queue
 import threading
 import time
 import zipfile
+from datetime import datetime, timedelta
 
 import pandas as pd
 import requests
@@ -133,7 +134,7 @@ def channel_data_generator(channelid, getAll=True, since_date=None, until_date=N
                     if since_date is not None and publish_date < since_date:
                         # break
                         return
-                    if until_date is None or (
+                    if (
                         until_date is not None and publish_date <= until_date
                     ):
                         yield item
@@ -169,29 +170,74 @@ def transform_columns(df):
     return df2
 
 
-def run_zip_files(folder):
-    datadict: dict[str, list] = {}
-    # print(folder)
-    for file in os.listdir(folder):
-        # print(file)
-        if not file.endswith(".csv"):
-            continue
-        # print(file)
-        filepath = os.path.join(folder, file)
-        if os.path.isfile(filepath):
-            key = file.split(".")[0][-8:]
-            if key not in datadict:
-                datadict[key] = []
-            datadict[key].append(file)
-    for key in datadict:
-        value = datadict[key]
-        print("日期" + key, "文件", value)
-        zip_path = os.path.join(folder, "SECURITIES_REGULATORY_" + key + ".zip")
-        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_LZMA) as zipf:
-            for file in value:
-                file_path = os.path.join(folder, file)
-                zipf.write(file_path, file)
-        print("已完成写入" + "压缩文件：" + zip_path)
+def run_zip_files(folder, getAll, since_date, until_date):
+    if getAll:
+        datadict: dict[str, list] = {}
+        # print(folder)
+        for file in os.listdir(folder):
+            # print(file)
+            if not file.endswith("all.csv"):
+                continue
+            # print(file)
+            filepath = os.path.join(folder, file)
+            if os.path.isfile(filepath):
+                key = "all"
+                if key not in datadict:
+                    datadict[key] = []
+                datadict[key].append(file)
+        for key in datadict:
+            value = datadict[key]
+            print("名称：" + key, "文件", value)
+            zip_path = os.path.join(folder, "SECURITIES_REGULATORY_" + key + ".zip")
+            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_LZMA) as zipf:
+                for file in value:
+                    file_path = os.path.join(folder, file)
+                    zipf.write(file_path, file)
+            print("已完成写入" + "压缩文件：" + zip_path)
+    else:
+        datadict: dict[str, list] = {}
+        # print(folder)
+        for file in os.listdir(folder):
+            # print(file)
+            if not file.endswith(".csv") or file.endswith("all.csv"):
+                continue
+            # print(file)
+            filepath = os.path.join(folder, file)
+            if os.path.isfile(filepath):
+                key = file.split(".")[0][-8:]
+                if not (since_date.replace(
+                        "-", ""
+                ) <= key <= until_date.replace(
+                    "-", ""
+                )):
+                    continue
+                if key not in datadict:
+                    datadict[key] = []
+                datadict[key].append(file)
+        if len(datadict) == 0:
+
+            start = datetime.strptime(since_date, '%Y-%m-%d')
+            end = datetime.strptime(until_date, '%Y-%m-%d')
+
+            # 使用循环从开始日期到结束日期打印所有日期
+            current_date = start
+            while current_date <= end:
+                # print(current_date.strftime('%Y-%m-%d'))
+                key = current_date.strftime('%Y%m%d')
+                zip_path = os.path.join(folder, "SECURITIES_REGULATORY_" + key + ".zip")
+                zipfile.ZipFile(zip_path, "w", zipfile.ZIP_LZMA)
+                print("已完成写入" + "压缩文件：" + zip_path)
+                current_date += timedelta(days=1)
+            return
+        for key in datadict:
+            value = datadict[key]
+            print("名称：" + key, "文件", value)
+            zip_path = os.path.join(folder, "SECURITIES_REGULATORY_" + key + ".zip")
+            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_LZMA) as zipf:
+                for file in value:
+                    file_path = os.path.join(folder, file)
+                    zipf.write(file_path, file)
+            print("已完成写入" + "压缩文件：" + zip_path)
 
 
 def parallel_download(
@@ -215,8 +261,8 @@ def parallel_download(
     if not os.path.exists(folder):
         os.mkdir(folder)
     threads = []
-    for index in channels.index():
-        channel = channels[index]
+    for index, channel in enumerate(channels):
+        # channel = channels[index]
         originname = origins[index]
         # relpath = (
         #     (
@@ -229,8 +275,8 @@ def parallel_download(
         #     else (os.path.join(folder, channel + ".json"))
         # )
         thread = threading.Thread(
-            target=lambda q, channel2, **ka: q.put(
-                download_channel_data(channel2, **ka)
+            target=lambda q, channel2, origin, **ka: q.put(
+                download_channel_data(channel2, origin, **ka)
             ),
             args=(
                 qr,
@@ -253,26 +299,47 @@ def parallel_download(
         results.append(qr.get())
 
     # print(results)
-    outputdatamap = {}
-    for result in results:
-        for item in result:
-            key = (
-                get_channel_type(item)
-                + "_"
-                + item["publishedTimeStr"][:10].replace("-", "")
-            )
-            if key not in outputdatamap:
-                outputdatamap[key] = []
-            outputdatamap[key].append(item)
-    for key in outputdatamap:
-        outputdata = outputdatamap[key]
-        filename = os.path.join(folder, key + ".csv")
-        df = pd.DataFrame(outputdata)
+    if getAll:
+        outputdatamap = {}
+        for result in results:
+            for item in result:
+                key = (
+                        get_channel_type(item)
+                        + "_"
+                        + "all"
+                )
+                if key not in outputdatamap:
+                    outputdatamap[key] = []
+                outputdatamap[key].append(item)
+        for key in outputdatamap:
+            outputdata = outputdatamap[key]
+            filename = os.path.join(folder, key + ".csv")
+            df = pd.DataFrame(outputdata)
 
-        df = transform_columns(df)
-        df.to_csv(filename, index=False, sep="|", encoding="utf-8", lineterminator="\n")
-        print("文件写入成功:" + filename)
-    run_zip_files(folder)
+            df = transform_columns(df)
+            df.to_csv(filename, index=False, sep="|", encoding="utf-8", lineterminator="\n")
+            print("文件写入成功:" + filename)
+    else:
+        outputdatamap = {}
+        for result in results:
+            for item in result:
+                key = (
+                        get_channel_type(item)
+                        + "_"
+                        + item["publishedTimeStr"][:10].replace("-", "")
+                )
+                if key not in outputdatamap:
+                    outputdatamap[key] = []
+                outputdatamap[key].append(item)
+        for key in outputdatamap:
+            outputdata = outputdatamap[key]
+            filename = os.path.join(folder, key + ".csv")
+            df = pd.DataFrame(outputdata)
+
+            df = transform_columns(df)
+            df.to_csv(filename, index=False, sep="|", encoding="utf-8", lineterminator="\n")
+            print("文件写入成功:" + filename)
+    run_zip_files(folder, getAll, since_date, until_date)
 
 
 def get_channel_type(item):

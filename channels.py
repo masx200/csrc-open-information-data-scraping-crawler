@@ -143,9 +143,10 @@ def channel_data_generator(channelid, getAll=True, since_date=None, until_date=N
 
 
 def transform_columns(df):
+    # print("部门："+df["部门"])
     df2 = pd.DataFrame()
     df2["发文日期"] = df["publishedTimeStr"].map(lambda x: x[:10])
-    df2["来源"] = df["发布机构"]
+    df2["来源"] = df["部门"]
     df2["索引号"] = df["索引号"]
     df2["分类"] = df["channelName"]
 
@@ -262,7 +263,7 @@ def get_channel_type(item):
     )
 
 
-def test_download_all():
+def task_download_all():
     current_directory = os.getcwd()
     channels = [
         "febe5cf9074b4ce6a52fd3d34d7a5cba",
@@ -276,4 +277,4 @@ def test_download_all():
 
 
 if __name__ == "__main__":
-    test_download_all()
+    task_download_all()
